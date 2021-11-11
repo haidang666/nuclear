@@ -70,8 +70,47 @@ const playNextItem = item => ({
 });
 
 export const addToQueue = (item, asNextItem = false) => async (dispatch, getState) => {
-  item.loading = !item.local;
+  item.loading = false;
+  item.streamFound = false;
   item = safeAddUuid(item);
+
+  const { 
+    connectivity
+  } = getState();
+  const isAbleToAdd = (!connectivity && item.local) || connectivity;
+
+  if (isAbleToAdd) {
+    await dispatch(!asNextItem ? addQueueItem(item) : playNextItem(item));
+
+    shouldFindTrackStream(item.uuid, getState)
+      && findTrackStream(item, dispatch, getState);
+  }
+};
+
+function shouldFindTrackStream(trackUuid, getState) {
+  const { 
+    queue: {
+      queueItems,
+      currentSong
+    }
+  } = getState();
+
+  const trackIndex = queueItems.findIndex(i => i.uuid === trackUuid);
+  const trackGap = trackIndex - currentSong;
+
+  return trackGap >= 0 && trackGap <= 1;
+}
+
+async function findTrackStream(track, dispatch, getState) {
+
+  if (!track || track?.streamFound) {
+    return;
+  }
+
+  dispatch(updateQueueItem({
+    ...track,
+    loading: true
+  }));
 
   const { 
     connectivity, 
@@ -79,26 +118,26 @@ export const addToQueue = (item, asNextItem = false) => async (dispatch, getStat
       plugins: { streamProviders }
     }
   } = getState();
-  const isAbleToAdd = (!connectivity && item.local) || connectivity;
 
-  isAbleToAdd && dispatch(!asNextItem ? addQueueItem(item) : playNextItem(item));
+  const isAbleToAdd = (!connectivity && track?.local) || connectivity;
 
-  if (!item.local && isAbleToAdd) {
+  if (!track.local && isAbleToAdd) {
     const selectedStreamProvider = getSelectedStreamProvider(getState);
     try {
       const streamData = await getTrackStream({
-        artist: item.artist,
-        name: item.name,
-        streams: item.streams
+        artist: track.artist,
+        name: track.name,
+        streams: track.streams
       }, selectedStreamProvider, streamProviders);
 
       if (streamData === undefined){
-        dispatch(removeFromQueue(item));
+        dispatch(removeFromQueue(track));
       } else {
         dispatch(updateQueueItem({
-          ...item,
+          ...track,
           loading: false,
           error: false,
+          streamFound: true,
           streams: [
             streamData
           ]
@@ -106,10 +145,10 @@ export const addToQueue = (item, asNextItem = false) => async (dispatch, getStat
         ));
       } 
     } catch (e) {
-      logger.error(`An error has occurred when searching for a stream with ${selectedStreamProvider.sourceName} for "${item.artist} - ${item.name}."`);
+      logger.error(`An error has occurred when searching for a stream with ${selectedStreamProvider.sourceName} for "${track.artist} - ${track.name}."`);
       logger.error(e);
       dispatch(updateQueueItem({
-        ...item,
+        ...track,
         loading: false,
         error: {
           message: `An error has occurred when searching for a stream with ${selectedStreamProvider.sourceName}.`,
@@ -118,7 +157,7 @@ export const addToQueue = (item, asNextItem = false) => async (dispatch, getStat
       }));
     }
   }
-};
+}
 
 export function playTrack(streamProviders, item) {
   return dispatch => {
@@ -185,12 +224,31 @@ function previousSongAction() {
   };
 }
 
-export function selectSong(index) {
-  return {
+export const selectSong = (index) => (dispatch, getState) => {
+  const {
+    settings: {
+      shuffleQueue
+    },
+    queue: {
+      queueItems
+    }
+  } = getState();
+
+  const selectedSong = queueItems[index];
+  findTrackStream(selectedSong, dispatch, getState);
+  // check when click next + previous, song end event
+  // console.log(index, selectedSong);
+  if (!shuffleQueue) {
+    const nextSong = queueItems[index + 1];
+    findTrackStream(nextSong, dispatch, getState);
+    // console.log(index + 1, nextSong);
+  }
+
+  dispatch({
     type: SELECT_SONG,
     payload: index
-  };
-}
+  });
+};
 
 export function repositionSong(itemFrom, itemTo) {
   return {
